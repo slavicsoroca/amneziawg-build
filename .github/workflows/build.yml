@@ -19,53 +19,78 @@ jobs:
         run: |
           SDK_URL="https://github.com/hzyitc/openwrt-redmi-ax3000/releases/download/ci-ipq50xx-mainline-kernel-5.15-openwrt-23.05-20240724-153345-UTC/openwrt-sdk-ipq50xx-arm_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
           wget -q --show-progress "$SDK_URL" -O sdk.tar.xz
-          echo "Extracting SDK..."
           tar xf sdk.tar.xz
-          SDK_DIR=$(ls -d openwrt-sdk-*/ | head -1)
-          echo "SDK_DIR=${SDK_DIR}" >> $GITHUB_ENV
-          echo "SDK extracted to: $SDK_DIR"
+          SDK_DIR=$(ls -d $PWD/openwrt-sdk-*/ | head -1 | sed 's|/$||')
+          echo "SDK_DIR=$SDK_DIR" >> $GITHUB_ENV
+          echo "SDK at: $SDK_DIR"
 
-      - name: Add AmneziaWG feed
+      - name: Clone amneziawg-openwrt sources
+        run: |
+          git clone --depth=1 https://github.com/amnezia-vpn/amneziawg-openwrt.git /tmp/awg-src
+          echo "=== amneziawg-openwrt structure ==="
+          ls -la /tmp/awg-src/
+
+      - name: Install amneziawg packages into SDK
+        run: |
+          for pkg in kmod-amneziawg amneziawg-tools luci-proto-amneziawg luci-app-amneziawg; do
+            if [ -d "/tmp/awg-src/$pkg" ]; then
+              cp -r "/tmp/awg-src/$pkg" "$SDK_DIR/package/"
+              echo "Installed: $pkg"
+            else
+              echo "Not found: $pkg"
+            fi
+          done
+          echo "=== SDK package dir ==="
+          ls "$SDK_DIR/package/" | grep -i amnezia || echo "(no amnezia packages yet)"
+
+      - name: Update default feeds (for dependencies)
         run: |
           cd "$SDK_DIR"
-          echo "src-git amneziawg https://github.com/amnezia-vpn/amneziawg-openwrt.git" >> feeds.conf
-          echo "Updating feeds..."
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       - name: Configure packages
         run: |
           cd "$SDK_DIR"
-          cat >> .config << 'EOF'
-          CONFIG_PACKAGE_kmod-amneziawg=m
-          CONFIG_PACKAGE_amneziawg-tools=y
-          CONFIG_PACKAGE_luci-proto-amneziawg=y
-          EOF
+          echo "CONFIG_PACKAGE_kmod-amneziawg=m" >> .config
+          echo "CONFIG_PACKAGE_amneziawg-tools=y" >> .config
+          echo "CONFIG_PACKAGE_luci-proto-amneziawg=y" >> .config
           make defconfig
 
       - name: Build kmod-amneziawg
         run: |
           cd "$SDK_DIR"
-          make package/kmod-amneziawg/compile -j$(nproc) V=s 2>&1 | tail -30
+          make package/kmod-amneziawg/compile V=s -j$(nproc)
 
       - name: Build amneziawg-tools
         run: |
           cd "$SDK_DIR"
-          make package/amneziawg-tools/compile -j$(nproc) V=s 2>&1 | tail -30
+          make package/amneziawg-tools/compile V=s -j$(nproc)
 
       - name: Build luci-proto-amneziawg
         run: |
           cd "$SDK_DIR"
-          make package/luci-proto-amneziawg/compile -j$(nproc) V=s 2>&1 | tail -30
+          make package/luci-proto-amneziawg/compile V=s -j$(nproc) || \
+          make package/luci-app-amneziawg/compile V=s -j$(nproc) || \
+          echo "LuCI package not found, skipping"
 
       - name: Collect .ipk packages
         run: |
           mkdir -p artifacts
-          find "$SDK_DIR/bin" -name "*.ipk" | grep -E "amnezia|awg" | while read f; do
-            echo "Found: $f"
-            cp "$f" artifacts/
+          find "$SDK_DIR/bin" -name "*.ipk" | while read f; do
+            name=$(basename "$f")
+            if echo "$name" | grep -qiE "amnezia|awg"; then
+              cp "$f" artifacts/
+              echo "Collected: $name"
+            fi
           done
+          echo "=== Collected packages ==="
           ls -la artifacts/
+          if [ -z "$(ls artifacts/)" ]; then
+            echo "ERROR: No packages collected!"
+            find "$SDK_DIR/bin" -name "*.ipk" | head -20
+            exit 1
+          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

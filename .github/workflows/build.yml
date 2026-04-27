@@ -1,0 +1,75 @@
+name: Build AmneziaWG for Redmi AX3000 (hzyitc ipq50xx kernel 5.15.150)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            build-essential libncurses5-dev python3 python3-distutils \
+            unzip wget git rsync zlib1g-dev gawk gettext libssl-dev \
+            file quilt
+
+      - name: Download hzyitc SDK (ipq50xx kernel 5.15.150)
+        run: |
+          SDK_URL="https://github.com/hzyitc/openwrt-redmi-ax3000/releases/download/ci-ipq50xx-mainline-kernel-5.15-openwrt-23.05-20240724-153345-UTC/openwrt-sdk-ipq50xx-arm_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
+          wget -q --show-progress "$SDK_URL" -O sdk.tar.xz
+          echo "Extracting SDK..."
+          tar xf sdk.tar.xz
+          SDK_DIR=$(ls -d openwrt-sdk-*/ | head -1)
+          echo "SDK_DIR=${SDK_DIR}" >> $GITHUB_ENV
+          echo "SDK extracted to: $SDK_DIR"
+
+      - name: Add AmneziaWG feed
+        run: |
+          cd "$SDK_DIR"
+          echo "src-git amneziawg https://github.com/amnezia-vpn/amneziawg-openwrt.git" >> feeds.conf
+          echo "Updating feeds..."
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configure packages
+        run: |
+          cd "$SDK_DIR"
+          cat >> .config << 'EOF'
+          CONFIG_PACKAGE_kmod-amneziawg=m
+          CONFIG_PACKAGE_amneziawg-tools=y
+          CONFIG_PACKAGE_luci-proto-amneziawg=y
+          EOF
+          make defconfig
+
+      - name: Build kmod-amneziawg
+        run: |
+          cd "$SDK_DIR"
+          make package/kmod-amneziawg/compile -j$(nproc) V=s 2>&1 | tail -30
+
+      - name: Build amneziawg-tools
+        run: |
+          cd "$SDK_DIR"
+          make package/amneziawg-tools/compile -j$(nproc) V=s 2>&1 | tail -30
+
+      - name: Build luci-proto-amneziawg
+        run: |
+          cd "$SDK_DIR"
+          make package/luci-proto-amneziawg/compile -j$(nproc) V=s 2>&1 | tail -30
+
+      - name: Collect .ipk packages
+        run: |
+          mkdir -p artifacts
+          find "$SDK_DIR/bin" -name "*.ipk" | grep -E "amnezia|awg" | while read f; do
+            echo "Found: $f"
+            cp "$f" artifacts/
+          done
+          ls -la artifacts/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: amneziawg-redmi-ax3000-ipq50xx-arm
+          path: artifacts/
+          retention-days: 30

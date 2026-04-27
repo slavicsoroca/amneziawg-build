@@ -12,8 +12,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y \
             build-essential libncurses5-dev python3 python3-distutils \
-            unzip wget git rsync zlib1g-dev gawk gettext libssl-dev \
-            file quilt
+            python3-pyelftools unzip wget git rsync zlib1g-dev gawk \
+            gettext libssl-dev file quilt
 
       - name: Download hzyitc SDK (ipq50xx kernel 5.15.150)
         run: |
@@ -24,26 +24,26 @@ jobs:
           echo "SDK_DIR=$SDK_DIR" >> $GITHUB_ENV
           echo "SDK at: $SDK_DIR"
 
-      - name: Clone amneziawg-openwrt sources
+      - name: Clone Slava-Shchipunov/awg-openwrt packages
         run: |
-          git clone --depth=1 https://github.com/amnezia-vpn/amneziawg-openwrt.git /tmp/awg-src
-          echo "=== amneziawg-openwrt structure ==="
+          # Use Slava's packages - his kmod Makefile downloads amneziawg-linux-kernel-module
+          # as a standalone out-of-tree module (doesn't need kernel wireguard source)
+          git clone --depth=1 https://github.com/Slava-Shchipunov/awg-openwrt.git /tmp/awg-src
+          echo "=== awg-openwrt structure ==="
           ls -la /tmp/awg-src/
 
-      - name: Install amneziawg packages into SDK
+      - name: Install packages into SDK
         run: |
-          for pkg in kmod-amneziawg amneziawg-tools luci-proto-amneziawg luci-app-amneziawg; do
+          for pkg in kmod-amneziawg amneziawg-tools luci-proto-amneziawg; do
             if [ -d "/tmp/awg-src/$pkg" ]; then
               cp -r "/tmp/awg-src/$pkg" "$SDK_DIR/package/"
               echo "Installed: $pkg"
             else
-              echo "Not found: $pkg"
+              echo "Not found: $pkg (skipping)"
             fi
           done
-          echo "=== SDK package dir ==="
-          ls "$SDK_DIR/package/" | grep -i amnezia || echo "(no amnezia packages yet)"
 
-      - name: Update default feeds (for dependencies)
+      - name: Update feeds (for dependencies)
         run: |
           cd "$SDK_DIR"
           ./scripts/feeds update -a
@@ -71,8 +71,7 @@ jobs:
         run: |
           cd "$SDK_DIR"
           make package/luci-proto-amneziawg/compile V=s -j$(nproc) || \
-          make package/luci-app-amneziawg/compile V=s -j$(nproc) || \
-          echo "LuCI package not found, skipping"
+            echo "LuCI build failed (non-critical), continuing"
 
       - name: Collect .ipk packages
         run: |
@@ -86,11 +85,7 @@ jobs:
           done
           echo "=== Collected packages ==="
           ls -la artifacts/
-          if [ -z "$(ls artifacts/)" ]; then
-            echo "ERROR: No packages collected!"
-            find "$SDK_DIR/bin" -name "*.ipk" | head -20
-            exit 1
-          fi
+          [ "$(ls -A artifacts/)" ] || { echo "ERROR: No packages found!"; exit 1; }
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
